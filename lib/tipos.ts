@@ -137,3 +137,10 @@ export function getNichoStyle(nicho: string | null) {
     return { bg: "#dcfce7", color: "#15803d" };
   return { bg: "#f1f5f9", color: "#64748b" };
 }
+
+export function isTesteLead(l: Pick<Lead, "empresa" | "campanha" | "observacoes">): boolean {
+  const campanha = (l.campanha || "").toLowerCase();
+  const empresa = l.empresa.trim().toUpperCase();
+  const obs = (l.observacoes || "").toLowerCase();
+  return campanha.includes("stripe-test") || campanha.includes("teste") || empresa.startsWith("TESTE-") || empresa.startsWith("TESTE ") || obs.includes("stripe test");
+}

@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { Lead, COLS, getNichoStyle, MOEDA } from "@/lib/tipos";
+import { Lead, COLS, getNichoStyle, MOEDA, isTesteLead } from "@/lib/tipos";
 
 function diasDesde(iso?: string | null) {
   if (!iso) return null;
@@ -36,16 +36,20 @@ export default function Kanban({ leads, onChange }: { leads: Lead[]; onChange: (
   const [excluindo, setExcluindo] = useState<string | null>(null);
   const [busca, setBusca] = useState("");
 
+  const comerciais = useMemo(() => leads.filter(l => !isTesteLead(l)), [leads]);
+  const testes = useMemo(() => leads.filter(l => isTesteLead(l)), [leads]);
+
   const filtrados = useMemo(() => {
+    const base = comerciais;
     const q = busca.trim().toLowerCase();
-    if (!q) return leads;
-    return leads.filter(l =>
+    if (!q) return base;
+    return base.filter(l =>
       l.empresa.toLowerCase().includes(q) ||
       (l.nicho || "").toLowerCase().includes(q) ||
       (l.contato_email || "").toLowerCase().includes(q) ||
       (l.pais || "").toLowerCase().includes(q)
     );
-  }, [leads, busca]);
+  }, [comerciais, busca]);
 
   async function mover(id: string, status: string) {
     await supabase.from("leads").update({ status }).eq("id", id);
@@ -84,6 +88,7 @@ export default function Kanban({ leads, onChange }: { leads: Lead[]; onChange: (
   }
 
   const total = filtrados.length;
+  const totalTestes = testes.length;
 
   return (
     <>
@@ -99,7 +104,8 @@ export default function Kanban({ leads, onChange }: { leads: Lead[]; onChange: (
         <span className="tag" style={{ background: total ? "#eff6ff" : "#f1f5f9", color: total ? "#2563eb" : "#64748b", borderColor: total ? "#bfdbfe" : "#e2e8f0", fontWeight: 750 } as React.CSSProperties}>
           {total} {total === 1 ? "lead" : "leads"} {busca ? "filtrados" : `no funil`}
         </span>
-        <span className="tag tag--muted">Etapas: Prospectado → Fechado · {COLS.length} colunas</span>
+        <span className="tag tag--muted">Etapas: Prospectado → Fechado · {COLS.length} colunas · comerciais</span>
+        {totalTestes > 0 && <span className="tag tag--muted" style={{ opacity: 0.85 } as React.CSSProperties}>{totalTestes} testes ocultos no funil (isolados abaixo)</span>}
       </div>
 
       <div className="board-scroll">
@@ -137,6 +143,7 @@ export default function Kanban({ leads, onChange }: { leads: Lead[]; onChange: (
 
                         <div className="card-top">
                           <span className="card-name">{l.empresa}</span>
+                          {isTesteLead(l) && <span className="tag tag--muted" style={{ fontSize: 9, letterSpacing: ".06em", fontWeight: 750 } as React.CSSProperties}>TESTE</span>}
                           {l.pago && <span className="badge badge--green">PAGO</span>}
                         </div>
 
@@ -183,6 +190,20 @@ export default function Kanban({ leads, onChange }: { leads: Lead[]; onChange: (
           })}
         </div>
       </div>
+
+      {totalTestes > 0 && (
+        <div className="panel" style={{ opacity: 0.9, marginTop: 14 }}>
+          <div className="panel-title">Registros de teste isolados ({totalTestes})</div>
+          <div className="panel-sub">não contam no funil comercial · auditoria apenas</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+            {testes.map(l => (
+              <span key={l.id} className="tag tag--muted" style={{ fontSize: 11 } as React.CSSProperties}>
+                {l.empresa} · {l.status}{l.pago ? " · pago" : ""} · {l.pais || "—"}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {aberto && (
         <div className="overlay" onClick={() => setAberto(null)}>

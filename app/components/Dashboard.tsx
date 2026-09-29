@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { Lead, MetricaDia, PAISES, MOEDA, COLS, PAIS_LABEL } from "@/lib/tipos";
+import { Lead, MetricaDia, PAISES, MOEDA, COLS, PAIS_LABEL, isTesteLead } from "@/lib/tipos";
 
 const ETAPAS_FUNIL = [
   "prospectado", "liberado", "opener_enviado", "followup_enviado",
@@ -56,32 +56,34 @@ export default function Dashboard({ leads, metricas, ritual, onSalvarRitual }: {
   const [salvando, setSalvando] = useState(false);
   const [salvo, setSalvo] = useState(false);
 
-  const calc = useMemo(() => {
-    const ativos = leads.filter(l => l.status !== "descartado");
-    const tocados = leads.filter(l => (ORDEM[l.status] ?? 0) >= 3 || l.data_toque_1);
-    const responderam = leads.filter(l => ["respondeu", "negociando", "fechado", "assinatura_ativa", "publicado"].includes(l.status));
-    const fechados = leads.filter(l => ["fechado", "publicado"].includes(l.status));
-    const assinaturas = leads.filter(l => l.status === "assinatura_ativa");
+  const comerciais = useMemo(() => leads.filter(l => !isTesteLead(l)), [leads]);
 
-    const recUnica = leads.filter(l => l.pago).reduce((s, l) => s + (l.valor || MOEDA[l.pais || "DE"]?.unica || 0), 0);
+  const calc = useMemo(() => {
+    const ativos = comerciais.filter(l => l.status !== "descartado");
+    const tocados = comerciais.filter(l => (ORDEM[l.status] ?? 0) >= 3 || l.data_toque_1);
+    const responderam = comerciais.filter(l => ["respondeu", "negociando", "fechado", "assinatura_ativa", "publicado"].includes(l.status));
+    const fechados = comerciais.filter(l => ["fechado", "publicado"].includes(l.status));
+    const assinaturas = comerciais.filter(l => l.status === "assinatura_ativa");
+
+    const recUnica = comerciais.filter(l => l.pago).reduce((s, l) => s + (l.valor || MOEDA[l.pais || "DE"]?.unica || 0), 0);
     const mrr = assinaturas.reduce((s, l) => s + (MOEDA[l.pais || "DE"]?.mensal || 39), 0);
 
     const taxaResposta = tocados.length ? (responderam.length / tocados.length) * 100 : 0;
     const taxaFechamento = tocados.length ? ((fechados.length + assinaturas.length) / tocados.length) * 100 : 0;
 
-    const toquesSemana = (de: number, ate: number) => leads.reduce((s, l) =>
+    const toquesSemana = (de: number, ate: number) => comerciais.reduce((s, l) =>
       s + [l.data_toque_1, l.data_toque_2, l.data_toque_3, l.data_toque_4]
         .filter(d => entreDias(de, ate, d)).length, 0);
     const enviados7 = toquesSemana(7, 0);
     const enviados14 = toquesSemana(14, 7);
-    const novos7 = leads.filter(l => dentroDe(7, l.created_at)).length;
-    const novos14 = leads.filter(l => entreDias(14, 7, l.created_at)).length;
+    const novos7 = comerciais.filter(l => dentroDe(7, l.created_at)).length;
+    const novos14 = comerciais.filter(l => entreDias(14, 7, l.created_at)).length;
 
     const opens7 = metricas.filter(m => dentroDe(7, m.dia + "T12:00:00Z")).reduce((s, m) => s + (m.opens || 0), 0);
 
     const funil: Record<string, { etapa: string; n: number; pct: number | null }[]> = {};
     for (const pais of PAISES) {
-      const doPais = leads.filter(l => (l.pais || "BR") === pais);
+      const doPais = comerciais.filter(l => (l.pais || "BR") === pais);
       const linhas: { etapa: string; n: number; pct: number | null }[] = [];
       let anterior: number | null = null;
       for (const et of ETAPAS_FUNIL) {
@@ -95,7 +97,7 @@ export default function Dashboard({ leads, metricas, ritual, onSalvarRitual }: {
     }
 
     const alertas: { tipo: "red" | "amber" | "green"; texto: string }[] = [];
-    const openers = leads.filter(l => (ORDEM[l.status] ?? 0) >= 3).length;
+    const openers = comerciais.filter(l => (ORDEM[l.status] ?? 0) >= 3).length;
     if (openers >= 100 && taxaResposta < 2) {
       alertas.push({ tipo: "red", texto: `GATILHO: ${openers} leads tocados com taxa de resposta ${taxaResposta.toFixed(1)}% (abaixo de 2%). Hora de repensar assunto, remetente ou oferta antes de escalar volume.` });
     }
@@ -121,16 +123,16 @@ export default function Dashboard({ leads, metricas, ritual, onSalvarRitual }: {
     const serieFechados = dias14.map(d => (porDia.get(d)?.fechados ?? 0) + (porDia.get(d)?.assinaturas ?? 0));
     const temSerie = metricas.length > 0 && dias14.some(d => porDia.has(d));
 
-    // Atividades recentes (leads mais recentes / tocados)
-    const recentes = [...leads].sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()).slice(0, 6);
-    const toquesRecentes = [...leads]
+    // Atividades recentes (leads mais recentes / tocados) — comerciais apenas
+    const recentes = [...comerciais].sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()).slice(0, 6);
+    const toquesRecentes = [...comerciais]
       .map(l => ({ l, d: l.data_toque_1 || l.data_toque_2 || l.data_toque_3 || l.data_toque_4 || null }))
       .filter(x => !!x.d)
       .sort((a, b) => new Date(b.d!).getTime() - new Date(a.d!).getTime())
       .slice(0, 5);
 
     return { ativos, tocados, responderam, fechados, assinaturas, recUnica, mrr, taxaResposta, taxaFechamento, enviados7, enviados14, novos7, novos14, opens7, funil, alertas, serieProspectados, serieEnviados, serieFechados, temSerie, dias14, recentes, toquesRecentes };
-  }, [leads, metricas]);
+  }, [comerciais, metricas]);
 
   async function salvarAjuste() {
     setSalvando(true);
@@ -355,7 +357,7 @@ export default function Dashboard({ leads, metricas, ritual, onSalvarRitual }: {
             </thead>
             <tbody>
               {COLS.map(c => {
-                const porPais = PAISES.map(p => leads.filter(l => (l.pais || "BR") === p && l.status === c.key).length);
+                const porPais = PAISES.map(p => comerciais.filter(l => (l.pais || "BR") === p && l.status === c.key).length);
                 const total = porPais.reduce((a, b) => a + b, 0);
                 if (total === 0) return null;
                 return (
@@ -366,7 +368,7 @@ export default function Dashboard({ leads, metricas, ritual, onSalvarRitual }: {
                   </tr>
                 );
               })}
-              {COLS.every(c => leads.filter(l => l.status === c.key).length === 0) && (
+              {COLS.every(c => comerciais.filter(l => l.status === c.key).length === 0) && (
                 <tr><td colSpan={PAISES.length + 2} style={{ textAlign: "center", color: "#94a3b8", padding: 18 }}>Nenhum lead em nenhuma etapa</td></tr>
               )}
             </tbody>
@@ -378,7 +380,7 @@ export default function Dashboard({ leads, metricas, ritual, onSalvarRitual }: {
           <div className="panel-sub">Reino Unido e Alemanha em destaque. BR incluso quando houver.</div>
           <div style={{ display: "grid", gap: 10 }}>
             {PAISES.map(p => {
-              const doPais = leads.filter(l => (l.pais || "BR") === p);
+              const doPais = comerciais.filter(l => (l.pais || "BR") === p);
               const fech = doPais.filter(l => ["fechado", "publicado", "assinatura_ativa"].includes(l.status)).length;
               const resp = doPais.filter(l => ["respondeu", "negociando"].includes(l.status)).length;
               const ativos = doPais.filter(l => l.status !== "descartado").length;

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { CSS } from "@/lib/css";
-import { Lead, Solicitacao, Onboarding, MetricaDia, PAISES, MOEDA, PAIS_LABEL, COLS } from "@/lib/tipos";
+import { Lead, Solicitacao, Onboarding, MetricaDia, PAISES, MOEDA, PAIS_LABEL, COLS, isTesteLead } from "@/lib/tipos";
 import Dashboard, { salvarRitualSemana } from "./components/Dashboard";
 import Kanban from "./components/Kanban";
 import Clientes from "./components/Clientes";
@@ -67,12 +67,15 @@ function AutomacoesView() {
 }
 
 function FinanceiroView({ leads, solicitacoes }: { leads: Lead[]; solicitacoes: Solicitacao[] }) {
-  const pagos = leads.filter(l => l.pago);
-  const assinaturas = leads.filter(l => l.status === "assinatura_ativa");
-  const canceladas = leads.filter(l => l.status === "assinatura_cancelada");
+  const comerciais = leads.filter(l => !isTesteLead(l));
+  const testes = leads.filter(l => isTesteLead(l));
+  const pagos = comerciais.filter(l => l.pago);
+  const assinaturas = comerciais.filter(l => l.status === "assinatura_ativa");
+  const canceladas = comerciais.filter(l => l.status === "assinatura_cancelada");
   const mrr = assinaturas.reduce((s, l) => s + (MOEDA[l.pais || "DE"]?.mensal || 39), 0);
   const receita = pagos.reduce((s, l) => s + (l.valor || MOEDA[l.pais || "DE"]?.unica || 0), 0);
-  const semOnboarding = leads.filter(l => (l.status === "fechado" || l.status === "assinatura_ativa" || l.status === "publicado") && !l.pago).length;
+  const semOnboarding = comerciais.filter(l => (l.status === "fechado" || l.status === "assinatura_ativa" || l.status === "publicado") && !l.pago).length;
+  const receitaTestes = testes.filter(l => l.pago).reduce((s, l) => s + (l.valor || 0), 0);
   return (
     <div className="dash">
       <div className="dash-grid">
@@ -104,14 +107,21 @@ function FinanceiroView({ leads, solicitacoes }: { leads: Lead[]; solicitacoes: 
         </div>
         <div className="panel">
           <div className="panel-title">Status financeiro no CRM</div>
-          <div className="panel-sub">Baseado em leads reais. Sem métricas inventadas.</div>
+          <div className="panel-sub">Baseado em leads comerciais (testes Stripe isolados). Sem métricas inventadas.</div>
           <table className="table">
             <tbody>
-              <tr><td style={{ fontWeight: 650 }}>Pagos (pago=true)</td><td className="num">{pagos.length}</td></tr>
-              <tr><td style={{ fontWeight: 650 }}>Assinatura ativa</td><td className="num">{assinaturas.length}</td></tr>
-              <tr><td style={{ fontWeight: 650 }}>Publicados</td><td className="num">{leads.filter(l => l.status === "publicado").length}</td></tr>
+              <tr><td style={{ fontWeight: 650 }}>Pagos (pago=true) · comerciais</td><td className="num">{pagos.length}</td></tr>
+              <tr><td style={{ fontWeight: 650 }}>Assinatura ativa · comercial</td><td className="num">{assinaturas.length}</td></tr>
+              <tr><td style={{ fontWeight: 650 }}>Publicados · comercial</td><td className="num">{comerciais.filter(l => l.status === "publicado").length}</td></tr>
               <tr><td style={{ fontWeight: 650 }}>Fechados sem pago marcado</td><td className="num">{semOnboarding}</td></tr>
-              <tr><td style={{ fontWeight: 650 }}>MRR estimado</td><td className="num">€ {mrr.toLocaleString("de-DE")}</td></tr>
+              <tr><td style={{ fontWeight: 650 }}>MRR estimado · comercial</td><td className="num">€ {mrr.toLocaleString("de-DE")}</td></tr>
+              {testes.length > 0 && (
+                <>
+                  <tr><td colSpan={2} style={{ fontSize: 11, color: "#94a3b8", paddingTop: 10, borderTop: "1px dashed #e2e8f0" }}>Registros de teste (não contam no comercial)</td></tr>
+                  <tr><td style={{ fontWeight: 650, color: "#64748b" }}>Testes pagos</td><td className="num" style={{ color: "#64748b" }}>{testes.filter(l => l.pago).length}</td></tr>
+                  <tr><td style={{ fontWeight: 650, color: "#64748b" }}>Valor testes</td><td className="num" style={{ color: "#64748b" }}>€/£ {receitaTestes.toLocaleString("de-DE")}</td></tr>
+                </>
+              )}
             </tbody>
           </table>
         </div>
@@ -119,13 +129,13 @@ function FinanceiroView({ leads, solicitacoes }: { leads: Lead[]; solicitacoes: 
 
       <div className="panel">
         <div className="panel-title">Entrega</div>
-        <div className="panel-sub">Briefing → Produção → Aprovação → Publicação. Dados vêm de onboarding e url_nova.</div>
+        <div className="panel-sub">Briefing → Produção → Aprovação → Publicação. Dados comerciais (testes isolados).</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
           {[
-            { k: "Briefing", v: `${leads.filter(l => l.status === "fechado" || l.status === "assinatura_ativa").length} cliente(s) aguardando briefing` },
-            { k: "Produção", v: `${leads.filter(l => l.status === "construido" || l.status === "liberado").length} site(s) em produção/iscas` },
-            { k: "Aprovação", v: `${leads.filter(l => l.status === "respondeu" || l.status === "negociando").length} em negociação` },
-            { k: "Publicação", v: `${leads.filter(l => l.status === "publicado").length} publicado(s)` },
+            { k: "Briefing", v: `${comerciais.filter(l => l.status === "fechado" || l.status === "assinatura_ativa").length} cliente(s) aguardando briefing` },
+            { k: "Produção", v: `${comerciais.filter(l => l.status === "construido" || l.status === "liberado").length} site(s) em produção/iscas` },
+            { k: "Aprovação", v: `${comerciais.filter(l => l.status === "respondeu" || l.status === "negociando").length} em negociação` },
+            { k: "Publicação", v: `${comerciais.filter(l => l.status === "publicado").length} publicado(s)` },
           ].map(s => (
             <div key={s.k} style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 14, padding: 14 }}>
               <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: "#64748b" }}>{s.k}</div>
@@ -186,12 +196,14 @@ export default function Painel() {
     router.replace("/login");
   }
 
-  const fechados = useMemo(() => leads.filter(l => ["fechado", "publicado"].includes(l.status)).length, [leads]);
-  const assinaturas = useMemo(() => leads.filter(l => l.status === "assinatura_ativa").length, [leads]);
-  const mrr = useMemo(() => leads.filter(l => l.status === "assinatura_ativa").reduce((s, l) => s + (MOEDA[l.pais || "DE"]?.mensal || 39), 0), [leads]);
-  const receita = useMemo(() => leads.filter(l => l.pago).reduce((s, l) => s + (l.valor || MOEDA[l.pais || "DE"]?.unica || 0), 0), [leads]);
+  const comerciaisHeader = useMemo(() => leads.filter(l => !isTesteLead(l)), [leads]);
+  const fechados = useMemo(() => comerciaisHeader.filter(l => ["fechado", "publicado"].includes(l.status)).length, [comerciaisHeader]);
+  const assinaturas = useMemo(() => comerciaisHeader.filter(l => l.status === "assinatura_ativa").length, [comerciaisHeader]);
+  const mrr = useMemo(() => comerciaisHeader.filter(l => l.status === "assinatura_ativa").reduce((s, l) => s + (MOEDA[l.pais || "DE"]?.mensal || 39), 0), [comerciaisHeader]);
+  const receita = useMemo(() => comerciaisHeader.filter(l => l.pago).reduce((s, l) => s + (l.valor || MOEDA[l.pais || "DE"]?.unica || 0), 0), [comerciaisHeader]);
+  const testesCount = useMemo(() => leads.filter(l => isTesteLead(l)).length, [leads]);
   const abertas = useMemo(() => solicitacoes.filter(s => s.status !== "concluida").length, [solicitacoes]);
-  const nPais = useCallback((p: string) => leads.filter(l => (l.pais || "BR") === p && l.status !== "descartado").length, [leads]);
+  const nPais = useCallback((p: string) => comerciaisHeader.filter(l => (l.pais || "BR") === p && l.status !== "descartado").length, [comerciaisHeader]);
 
   const titulo = useMemo(() => {
     if (aba === "dash") return { t: "Análise", s: "Visão geral por país, funil acumulado e números-gatilho da semana.", badge: "HQ" };
@@ -226,7 +238,7 @@ export default function Painel() {
             <button className={`sidebar-item${aba === "dash" ? " sidebar-item--on" : ""}`} onClick={() => navTo("dash")}>
               <span className="sidebar-dot" style={{ color: "#3b82f6", background: "#3b82f6" }} />
               Análise
-              <span className="sidebar-count">{leads.length}</span>
+              <span className="sidebar-count">{comerciaisHeader.length}</span>
             </button>
 
             <div className="sidebar-section">Funil de vendas</div>

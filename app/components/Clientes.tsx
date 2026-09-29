@@ -1,11 +1,13 @@
 "use client";
 
-import { Lead, Onboarding, MOEDA } from "@/lib/tipos";
+import { Lead, Onboarding, MOEDA, isTesteLead } from "@/lib/tipos";
 
 const STATUS_CLIENTE = ["fechado", "assinatura_ativa", "publicado", "assinatura_cancelada"];
 
 export default function Clientes({ leads, onboardings }: { leads: Lead[]; onboardings: Onboarding[] }) {
-  const clientes = leads.filter(l => STATUS_CLIENTE.includes(l.status) || l.pago);
+  const comerciais = leads.filter(l => !isTesteLead(l));
+  const testes = leads.filter(l => isTesteLead(l) && (STATUS_CLIENTE.includes(l.status) || l.pago));
+  const clientes = comerciais.filter(l => STATUS_CLIENTE.includes(l.status) || l.pago);
   const obPorLead = new Map(onboardings.map(o => [o.lead_id, o]));
 
   const badge = (s: string) => {
@@ -19,8 +21,8 @@ export default function Clientes({ leads, onboardings }: { leads: Lead[]; onboar
     <div className="dash">
       <div className="panel">
         <div className="panel-title">Clientes ({clientes.length})</div>
-        <div className="panel-sub">quem pagou ou assinou, com dados de onboarding quando preenchidos</div>
-        {clientes.length === 0 && <div className="empty">Nenhum cliente ainda. O primeiro está chegando.</div>}
+        <div className="panel-sub">clientes comerciais (testes Stripe isolados abaixo)</div>
+        {clientes.length === 0 && <div className="empty">Nenhum cliente comercial ainda. O primeiro está chegando.</div>}
         {clientes.length > 0 && (
           <table className="table">
             <thead>
@@ -90,6 +92,26 @@ export default function Clientes({ leads, onboardings }: { leads: Lead[]; onboar
           </div>
         );
       })}
+      {testes.length > 0 && (
+        <div className="panel" style={{ opacity: 0.9 }}>
+          <div className="panel-title">Registros de teste ({testes.length})</div>
+          <div className="panel-sub">não contam como clientes comerciais · mantidos apenas para auditoria</div>
+          <table className="table">
+            <thead><tr><th>Empresa</th><th>País</th><th>Status</th><th>Valor</th><th>Email</th></tr></thead>
+            <tbody>
+              {testes.map(l => (
+                <tr key={l.id}>
+                  <td style={{ fontWeight: 600, color: "#64748b" }}>{l.empresa}</td>
+                  <td style={{ color: "#64748b" }}>{l.pais || "—"}</td>
+                  <td><span className="tag tag--muted">{l.status}</span></td>
+                  <td className="num" style={{ color: "#64748b" }}>{l.valor ? `£/€ ${l.valor}` : "—"}</td>
+                  <td style={{ color: "#64748b", fontSize: 12 }}>{l.contato_email || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
