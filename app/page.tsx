@@ -405,7 +405,7 @@ export default function Painel() {
               <Dashboard leads={leads} metricas={metricas} ritual={ritual} onSalvarRitual={async a => { await salvarRitualSemana(a); carregar(); }} />
             )}
             {(aba === "DE" || aba === "UK" || aba === "UKH" || aba === "BR") && (
-              <Kanban leads={leads.filter(l => (l.pais || "BR") === aba)} onChange={carregar} />
+              <Kanban leads={leads.filter(l => (l.pais || "BR") === aba)} onChange={carregar} importarPais={aba === "UK" ? "UK" : undefined} />
             )}
             {aba === "clientes" && <Clientes leads={leads} onboardings={onboardings} />}
             {aba === "solicitacoes" && <Solicitacoes solicitacoes={solicitacoes} onChange={carregar} />}

@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import ImportarLead from "./ImportarLead";
 import { Lead, COLS, getNichoStyle, MOEDA, isTesteLead } from "@/lib/tipos";
 
 function diasDesde(iso?: string | null) {
@@ -30,7 +31,7 @@ function prioridadeVisual(status: string) {
 
 type TabDet = "dados" | "auditoria" | "oportunidades" | "previa" | "emails" | "respostas" | "proposta" | "historico";
 
-export default function Kanban({ leads, onChange }: { leads: Lead[]; onChange: () => void }) {
+export default function Kanban({ leads, onChange, importarPais }: { leads: Lead[]; onChange: () => void; importarPais?: string }) {
   const [aberto, setAberto] = useState<Lead | null>(null);
   const [tab, setTab] = useState<TabDet>("dados");
   const [excluindo, setExcluindo] = useState<string | null>(null);
@@ -101,6 +102,7 @@ export default function Kanban({ leads, onChange }: { leads: Lead[]; onChange: (
             onChange={e => setBusca(e.target.value)}
           />
         </div>
+        {importarPais && <ImportarLead pais={importarPais} onCriado={l => { onChange(); abrirDetalhe(l); }} />}
         <span className="tag" style={{ background: total ? "#eff6ff" : "#f1f5f9", color: total ? "#2563eb" : "#64748b", borderColor: total ? "#bfdbfe" : "#e2e8f0", fontWeight: 750 } as React.CSSProperties}>
           {total} {total === 1 ? "lead" : "leads"} {busca ? "filtrados" : `no funil`}
         </span>
