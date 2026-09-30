@@ -12,34 +12,124 @@ import Solicitacoes from "./components/Solicitacoes";
 
 type Aba = "dash" | "DE" | "UK" | "UKH" | "BR" | "clientes" | "solicitacoes" | "automacoes" | "financeiro";
 
+type Run = { rotina: string; started_at: string | null; finished_at: string | null; status: string; itens_processados: number; falhas?: number | null; erro: string | null; cron_expr: string | null; duracao_ms?: number | null };
+type Ag = { rotina: string; cron_expr: string | null; instalado: boolean; habilitado: boolean; atualizado_em: string | null };
+type Estado = { rotina: string; started_at: string | null; finished_at: string | null; status: string | null; itens_processados: number | null; falhas: number | null; erro: string | null; run_cron_expr: string | null; duracao_ms: number | null; ag_cron_expr: string | null; instalado: boolean | null; habilitado: boolean | null; atualizado_em: string | null };
+
+const STALE_MS = 48 * 3600 * 1000; // 48h sem run => tratar como obsoleta (não "Ativa")
+
+function isStale(iso: string | null): boolean {
+  if (!iso) return true;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return true;
+  return Date.now() - t > STALE_MS;
+}
+
 function AutomacoesView() {
-  const rotinas: { nome: string; desc: string; estado: "nao_configurada" | "ativa" | "desativada" | "erro"; detalhe: string }[] = [
-    { nome: "Prospecção diária", desc: "Busca novos leads com site ruim e email público", estado: "nao_configurada", detalhe: "Estado real depende de cron no servidor. Sem dados no backend, exibido como não configurado." },
-    { nome: "Qualificação", desc: "Filtra lista antes de gastar crédito de imagem", estado: "nao_configurada", detalhe: "Sem endpoint de status no CRM. Não inventar horário." },
-    { nome: "Envio de emails", desc: "Opener e cadência do funil", estado: "nao_configurada", detalhe: "Verificar flags de_ativo / uk_ativo no servidor antes de marcar como ativa." },
-    { nome: "Acompanhamentos FU1 · FU2 · FU3", desc: "Follow-ups automáticos até 3 tentativas", estado: "nao_configurada", detalhe: "Cada FU mostra horário e última execução somente se backend fornecer." },
-    { nome: "Monitoramento de respostas", desc: "Classifica resposta e avisa no Telegram", estado: "nao_configurada", detalhe: "Sem telemetria no painel. Exibir vazio bem desenhado." },
-    { nome: "Relatórios diários", desc: "Métricas e ritual semanal", estado: "nao_configurada", detalhe: "Alimentado por metricas_diarias e ritual_semanal quando houver linhas." },
+  const [runs, setRuns] = useState<Run[] | null>(null);
+  const [ags, setAgs] = useState<Ag[] | null>(null);
+  const [estados, setEstados] = useState<Estado[] | null>(null);
+  const [erroRuns, setErroRuns] = useState<string | null>(null);
+
+  useEffect(() => {
+    let ativo = true;
+    // Fonte verificável: v_automacao_estado quando existir, fallback v_automacao_ultima
+    supabase.from("v_automacao_estado").select("*").then(({ data, error }) => {
+      if (!ativo) return;
+      if (!error && data) { setEstados(data as Estado[]); setRuns(data as unknown as Run[]); setAgs(data as unknown as Ag[]); return; }
+      // fallback antes da migration estendida
+      supabase.from("v_automacao_ultima").select("*").then(({ data: d2, error: e2 }) => {
+        if (!ativo) return;
+        if (e2) { setErroRuns(e2.message); setRuns([]); setAgs([]); setEstados([]); return; }
+        setRuns((d2 as Run[]) || []);
+        setAgs([]);
+        setEstados(null);
+      });
+      if (error && String(error.message).includes("does not exist")) {
+        // sem v_automacao_estado ainda, não é erro operacional
+        setErroRuns(null);
+      } else if (error) {
+        setErroRuns(error.message);
+      }
+    });
+    // também tentar ler agendamentos isoladamente para estados quando v_automacao_estado não existir
+    supabase.from("automacao_agendamentos").select("*").then(({ data, error }) => {
+      if (!ativo || error || !data) return;
+      setAgs(data as Ag[]);
+    });
+    return () => { ativo = false; };
+  }, []);
+
+  const porRotina = useMemo(() => new Map((runs || []).map(r => [r.rotina, r])), [runs]);
+  const porAg = useMemo(() => new Map((ags || []).map(a => [a.rotina, a])), [ags]);
+  const porEstado = useMemo(() => (estados ? new Map(estados.map(e => [e.rotina, e])) : null), [estados]);
+
+  const rotinas: { key: string; nome: string; desc: string; cron: string; detalhe: string; estadoBase: string }[] = [
+    { key: "prospectar_de prospectar_uk", nome: "Prospecção diária", desc: "Busca novos leads com site ruim e email público", cron: "0 5 * * * (proposto)", detalhe: "Thomson Local / 11880 + dedupe. Estado só confirma após migration + run.", estadoBase: "Preparada" },
+    { key: "qualificacao", nome: "Qualificação", desc: "Filtra lista antes de gastar crédito de imagem", cron: "sob demanda (proposto)", detalhe: "prospectar_uk_qualificado --qualificados-only. Desativado até aprovar.", estadoBase: "Preparada" },
+    { key: "disparo_de disparo_uk", nome: "Envio de e-mails", desc: "Opener e cadência do funil", cron: "0 8 * * * (proposto)", detalhe: "Brevo + ensure_* + teto. FU3 permanecerá desativado até aprovação.", estadoBase: "Preparada" },
+    { key: "followup_de_1 followup_uk_1 followup_de_2 followup_uk_2 followup_de_3 followup_uk_3", nome: "Acompanhamentos FU1 · FU2 · FU3", desc: "Follow-ups automáticos (FU3 desativado até aprovação)", cron: "45 9 / 15 10 / 45 10 (proposto)", detalhe: "FU1 2d, FU2 4d. FU3 existe mas ficará comentado no cron até autorizar.", estadoBase: "Preparada" },
+    { key: "monitor_de monitor_uk monitor_aberturas", nome: "Monitoramento de respostas", desc: "Classifica resposta e avisa no Telegram", cron: "*/15 e */30 (proposto)", detalhe: "Gmail + Brevo opens. Desativado até instalar.", estadoBase: "Preparada" },
+    { key: "digest_matinal metricas_diarias", nome: "Relatórios diários", desc: "Métricas e ritual semanal", cron: "30 6 / 45 6 (proposto)", detalhe: "metricas_diarias + digest. Métricas filtram TEST.", estadoBase: "Preparada" },
   ];
-  const chip = (e: string) => {
-    if (e === "ativa") return { bg: "#dcfce7", fg: "#15803d", bd: "#bbf7d0", t: "Ativa" };
-    if (e === "desativada") return { bg: "#f1f5f9", fg: "#64748b", bd: "#e2e8f0", t: "Desativada" };
-    if (e === "erro") return { bg: "#fef2f2", fg: "#dc2626", bd: "#fecaca", t: "Erro" };
-    return { bg: "#fef9c3", fg: "#92400e", bd: "#fde68a", t: "Não configurada" };
+
+  const chip = (keys: string, estadoBase: string) => {
+    const parts = keys.split(" ");
+    const rs = parts.map(k => porRotina.get(k)).filter(Boolean) as Run[];
+    // Fonte verificável: agendamento instalado/habilitado
+    const agsDoGrupo = parts.map(k => porAg.get(k)).filter(Boolean) as Ag[];
+    const temAg = agsDoGrupo.length > 0;
+    const instalado = temAg && agsDoGrupo.some(a => a.instalado);
+    const habilitado = temAg && agsDoGrupo.some(a => a.habilitado);
+    if (erroRuns) return { bg: "#f1f5f9", fg: "#64748b", bd: "#e2e8f0", t: "Dados indisponíveis" };
+    if (!runs) return { bg: "#f1f5f9", fg: "#64748b", bd: "#e2e8f0", t: "Carregando…" };
+    if (rs.length === 0) {
+      if (temAg && instalado && habilitado) return { bg: "#fef9c3", fg: "#92400e", bd: "#fde68a", t: "Instalada (sem execução)" };
+      if (temAg && instalado && !habilitado) return { bg: "#f1f5f9", fg: "#64748b", bd: "#e2e8f0", t: "Instalada e desativada" };
+      return estadoBase === "Preparada"
+        ? { bg: "#fef9c3", fg: "#92400e", bd: "#fde68a", t: "Preparada" }
+        : { bg: "#fef9c3", fg: "#92400e", bd: "#fde68a", t: "Não configurada" };
+    }
+    // erro tem prioridade, mesmo stale (mas só se houve run)
+    if (rs.some(r => r.status === "erro" && !isStale(r.started_at))) return { bg: "#fef2f2", fg: "#dc2626", bd: "#fecaca", t: "Erro" };
+    if (rs.some(r => r.status === "erro")) return { bg: "#fef2f2", fg: "#dc2626", bd: "#fecaca", t: "Erro (em execução anterior)" };
+    // Em execução: started recente e sem finished
+    if (rs.some(r => r.finished_at == null && r.started_at && !isStale(r.started_at))) return { bg: "#dbeafe", fg: "#1d4ed8", bd: "#bfdbfe", t: "Em execução" };
+    // Ativa SOMENTE se comprovadamente instalado e habilitado na fonte verificável e com ok recente.
+    // Uma execução manual ou fictícia NUNCA torna a rotina Ativa.
+    const okRecente = rs.some(r => r.status === "ok" && !isStale(r.started_at));
+    if (okRecente) {
+      if (temAg && instalado && habilitado) {
+        return { bg: "#dcfce7", fg: "#15803d", bd: "#bbf7d0", t: "Ativa" };
+      }
+      if (temAg && instalado && !habilitado) {
+        return { bg: "#f1f5f9", fg: "#64748b", bd: "#e2e8f0", t: "Instalada e desativada" };
+      }
+      return { bg: "#fef9c3", fg: "#92400e", bd: "#fde68a", t: "Preparada (execução manual)" };
+    }
+    if (rs.some(r => r.status === "ok")) return { bg: "#f1f5f9", fg: "#64748b", bd: "#e2e8f0", t: "Desativada (última obsoleta)" };
+    if (rs.some(r => r.status === "skip")) return { bg: "#f1f5f9", fg: "#64748b", bd: "#e2e8f0", t: "Desativada" };
+    return { bg: "#f1f5f9", fg: "#64748b", bd: "#e2e8f0", t: "Desativada" };
   };
+
   return (
     <div className="dash">
       <div className="panel">
         <div className="panel-head">
           <div>
             <div className="panel-title">Automações</div>
-            <div className="panel-sub">Cada rotina mostra o estado verdadeiro. Horários e última execução aparecem somente quando o backend fornecer. Nenhum botão ativa rotina sem autorização.</div>
+            <div className="panel-sub">Estado real via maquina_sites.v_automacao_estado (agendamento instalado/habilitado + última execução). Run antiga ou manual não implica Ativa. Somente leitura.</div>
           </div>
           <span className="topbar-badge">Somente leitura</span>
         </div>
+        {erroRuns && <div className="alerta" style={{ marginBottom: 12 }}>Dados indisponíveis: {erroRuns}. Verifique migration e permissões (view só para authenticated).</div>}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
           {rotinas.map(r => {
-            const c = chip(r.estado);
+            const c = chip(r.key, r.estadoBase);
+            const keys = r.key.split(" ");
+            const rs = keys.map(k => porRotina.get(k)).filter(Boolean) as Run[];
+            const last = rs.sort((a,b) => new Date(b.started_at || 0).getTime() - new Date(a.started_at || 0).getTime())[0];
+            const stale = last ? isStale(last.started_at) : false;
             return (
               <div key={r.nome} style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 16, padding: 16, display: "flex", flexDirection: "column", gap: 8 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "space-between" }}>
@@ -49,9 +139,18 @@ function AutomacoesView() {
                 <div style={{ fontSize: 12.5, color: "#64748b", lineHeight: 1.5 }}>{r.desc}</div>
                 <div style={{ fontSize: 11.5, color: "#94a3b8", lineHeight: 1.5, background: "#f8fafc", border: "1px solid #f1f5f9", borderRadius: 10, padding: "8px 10px" }}>{r.detalhe}</div>
                 <div style={{ display: "flex", gap: 8, marginTop: 2, flexWrap: "wrap" }}>
-                  <span className="tag tag--muted">Horário: —</span>
-                  <span className="tag tag--muted">Última execução: —</span>
+                  {(() => {
+                    const agsDoGrupo = r.key.split(" ").map(k => porAg.get(k)).filter(Boolean) as Ag[];
+                    const ag = agsDoGrupo.sort((a,b)=> (a.cron_expr||"").localeCompare(b.cron_expr||""))[0];
+                    const horario = ag?.instalado ? `Instalado: ${ag.cron_expr || r.cron}` : `Proposto: ${r.cron}`;
+                    return <span className="tag tag--muted">{horario}</span>;
+                  })()}
+                  <span className="tag tag--muted">Última: {last?.started_at ? new Date(last.started_at).toLocaleString("pt-BR") + (stale ? " · obsoleta" : "") : "—"}</span>
+                  <span className="tag tag--muted">Itens: {last ? String(last.itens_processados ?? "—") : "—"}</span>
+                  {last?.status === "skip" && <span className="tag tag--muted">skip: {last?.erro ? last.erro.slice(0,60) : "desativada"}</span>}
                 </div>
+                {last?.erro && last.status !== "skip" && <div style={{ fontSize: 11, color: "#dc2626", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: "8px 10px" }}>{last.erro.slice(0,300)}</div>}
+                {last?.erro && last.status === "skip" && last.erro.length > 60 && <div style={{ fontSize: 11, color: "#64748b", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px" }}>{last.erro.slice(0,300)}</div>}
               </div>
             );
           })}
@@ -59,8 +158,8 @@ function AutomacoesView() {
       </div>
       <div className="empty-state">
         <div className="empty-state-icon">◷</div>
-        <div className="empty-state-title">Sem telemetria de automações no backend</div>
-        <div className="empty-state-sub">Quando o servidor expor status por rotina (ativa, horário e last_run), esta tela passa a renderizar o estado real. Até lá, o vazio bem desenhado evita inventar dados.</div>
+        <div className="empty-state-title">Telemetria: {erroRuns ? "dados indisponíveis" : runs === null ? "carregando…" : (runs.length === 0 && (ags?.length ?? 0) === 0) ? "sem dados — Preparada até migration + primeira execução" : `${runs.length} rotinas com última execução${(ags?.length ?? 0) > 0 ? ` · ${ags!.length} agendamentos registrados` : ""}`}</div>
+        <div className="empty-state-sub">Fonte: maquina_sites.v_automacao_estado (migration não aplicada: fallback v_automacao_ultima). Ativa exige agendamento instalado+habilitado e execução recente. Horários propostos ≠ instalados.</div>
       </div>
     </div>
   );
