@@ -17,18 +17,35 @@ async function tgAlert(texto: string) {
 // GET /api/cliente?token=xxx  -> lead + onboarding + solicitacoes
 export async function GET(request: Request) {
   const token = new URL(request.url).searchParams.get("token");
-  if (!token || token.length < 8) return Response.json({ erro: "token" }, { status: 400 });
+  if (!token || token.trim().length < 8) {
+    return Response.json(
+      { erro: "token_invalido", msg: "Token ausente ou com menos de 8 caracteres" },
+      { status: 400 }
+    );
+  }
+
+  const tokenLimpo = token.trim();
 
   try {
     const sb = await serverSupabase();
     const { data: leads, error } = await sb
       .from("leads")
       .select("id, empresa, pais, status, url_nova, url_antiga, screenshot_url, pago")
-      .eq("token_cliente", token)
+      .eq("token_cliente", tokenLimpo)
       .limit(1);
-    if (error) throw error;
+
+    if (error) {
+      console.error("[api/cliente GET] Erro ao consultar leads:", error.message, error.details || "");
+      throw error;
+    }
+
     const lead = leads?.[0];
-    if (!lead) return Response.json({ erro: "nao_encontrado" }, { status: 404 });
+    if (!lead) {
+      return Response.json(
+        { erro: "nao_encontrado", msg: "Link invalido ou lead nao encontrado" },
+        { status: 404 }
+      );
+    }
 
     const [{ data: ob }, { data: reqs }] = await Promise.all([
       sb.from("onboarding").select("*").eq("lead_id", lead.id).limit(1),
@@ -36,24 +53,46 @@ export async function GET(request: Request) {
     ]);
 
     return Response.json({ lead, onboarding: ob?.[0] || null, solicitacoes: reqs || [] });
-  } catch (e) {
-    console.error(e);
-    return Response.json({ erro: "interno" }, { status: 500 });
+  } catch (e: unknown) {
+    const errMsg = e instanceof Error ? e.message : String(e);
+    console.error("[api/cliente GET] Excecao interna:", errMsg);
+    return Response.json(
+      { erro: "interno", msg: "Falha interna do servidor ao carregar dados do cliente" },
+      { status: 500 }
+    );
   }
 }
 
 // POST /api/cliente  { token, tipo: "onboarding"|"solicitacao", dados: {...} }
 export async function POST(request: Request) {
   let body: { token?: string; tipo?: string; dados?: Record<string, unknown> };
-  try { body = await request.json(); } catch { return Response.json({ erro: "json" }, { status: 400 }); }
+  try { body = await request.json(); } catch {
+    return Response.json({ erro: "json_invalido" }, { status: 400 });
+  }
   const { token, tipo, dados } = body;
-  if (!token || !tipo || !dados) return Response.json({ erro: "campos" }, { status: 400 });
+  if (!token || token.trim().length < 8 || !tipo || !dados) {
+    return Response.json({ erro: "campos_obrigatorios" }, { status: 400 });
+  }
+
+  const tokenLimpo = token.trim();
 
   try {
     const sb = await serverSupabase();
-    const { data: leads } = await sb.from("leads").select("id, pais").eq("token_cliente", token).limit(1);
+    const { data: leads, error: leadErr } = await sb
+      .from("leads")
+      .select("id, pais")
+      .eq("token_cliente", tokenLimpo)
+      .limit(1);
+
+    if (leadErr) {
+      console.error("[api/cliente POST] Erro ao verificar token:", leadErr.message);
+      throw leadErr;
+    }
+
     const lead = leads?.[0];
-    if (!lead) return Response.json({ erro: "nao_encontrado" }, { status: 404 });
+    if (!lead) {
+      return Response.json({ erro: "nao_encontrado" }, { status: 404 });
+    }
 
     if (tipo === "onboarding") {
       const registro = {
@@ -68,7 +107,10 @@ export async function POST(request: Request) {
         atualizado_em: new Date().toISOString(),
       };
       const { error } = await sb.from("onboarding").upsert(registro, { onConflict: "lead_id" });
-      if (error) throw error;
+      if (error) {
+        console.error("[api/cliente POST] Erro no onboarding:", error.message);
+        throw error;
+      }
       return Response.json({ ok: true });
     }
 
@@ -86,16 +128,20 @@ export async function POST(request: Request) {
         anexos: Array.isArray(dados.anexos) ? dados.anexos.slice(0, 20) : [],
         status: "aberta",
       });
-      if (error) throw error;
+      if (error) {
+        console.error("[api/cliente POST] Erro na solicitacao:", error.message);
+        throw error;
+      }
       await tgAlert(cancel
         ? `${MARCA}: pedido de CANCELAMENTO\n${empresa}\nMotivo: ${descricao || "nao informado"}\nCancele no painel do seu provedor de pagamento e responda o cliente.`
         : `${MARCA}: nova solicitacao de alteracao\n${empresa}\n${titulo}`);
       return Response.json({ ok: true });
     }
 
-    return Response.json({ erro: "tipo" }, { status: 400 });
-  } catch (e) {
-    console.error(e);
+    return Response.json({ erro: "tipo_invalido" }, { status: 400 });
+  } catch (e: unknown) {
+    const errMsg = e instanceof Error ? e.message : String(e);
+    console.error("[api/cliente POST] Excecao interna:", errMsg);
     return Response.json({ erro: "interno" }, { status: 500 });
   }
 }

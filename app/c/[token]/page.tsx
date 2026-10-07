@@ -14,6 +14,13 @@ type Anexo = { nome: string; url: string };
 
 const PAGO_STATUS = ["fechado", "assinatura_ativa", "publicado"];
 
+// Mensagens de indisponibilidade temporária de serviço por idioma
+const MSG_INDISPONIVEL: Record<Lang, string> = {
+  en: "Service temporarily unavailable. Please try again in a few moments.",
+  de: "Dienst vorübergehend nicht verfügbar. Bitte versuchen Sie es in wenigen Augenblicken erneut.",
+  pt: "Serviço temporariamente indisponível. Tente novamente em instantes.",
+};
+
 export default function ClientPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = use(params);
 
@@ -21,7 +28,7 @@ export default function ClientPage({ params }: { params: Promise<{ token: string
   const [reqs, setReqs] = useState<Req[]>([]);
   const [obJaEnviado, setObJaEnviado] = useState(false);
   const [carregando, setCarregando] = useState(true);
-  const [invalido, setInvalido] = useState(false);
+  const [erroTipo, setErroTipo] = useState<"nenhum" | "invalido" | "indisponivel">("nenhum");
   const [lang, setLang] = useState<Lang>("en");
 
   // onboarding form
@@ -69,7 +76,16 @@ export default function ClientPage({ params }: { params: Promise<{ token: string
   const carregar = useCallback(async () => {
     try {
       const r = await fetch(`/api/cliente?token=${encodeURIComponent(token)}`);
-      if (!r.ok) { setInvalido(true); setCarregando(false); return; }
+      if (!r.ok) {
+        // Distingue 404 (token inexistente) de 500 (erro de servidor)
+        if (r.status === 404 || r.status === 400) {
+          setErroTipo("invalido");
+        } else {
+          setErroTipo("indisponivel");
+        }
+        setCarregando(false);
+        return;
+      }
       const d = await r.json();
       setLead(d.lead);
       setReqs(d.solicitacoes || []);
@@ -83,9 +99,11 @@ export default function ClientPage({ params }: { params: Promise<{ token: string
         setDnsObs(d.onboarding.dns_obs || "");
         setAnexos(d.onboarding.anexos || []);
       }
+      setErroTipo("nenhum");
       setCarregando(false);
     } catch {
-      setInvalido(true); setCarregando(false);
+      setErroTipo("indisponivel");
+      setCarregando(false);
     }
   }, [token]);
 
@@ -140,7 +158,20 @@ export default function ClientPage({ params }: { params: Promise<{ token: string
     <div className="loading-screen"><div className="dots"><span /><span /><span /></div></div></>
   );
 
-  if (invalido || !lead) return (
+  if (erroTipo === "indisponivel") return (
+    <><style>{CSS}</style>
+    <div className="cp-root"><div className="cp-wrap">
+      <div className="cp-brand">{DICTS[lang].brand}</div>
+      <div className="alerta alerta--yellow" style={{ marginTop: 24 }}>{MSG_INDISPONIVEL[lang]}</div>
+      <div style={{ marginTop: 14 }}>
+        <button className="pill pill--btn" onClick={() => { setCarregando(true); carregar(); }}>
+          {lang === "pt" ? "Tentar novamente" : lang === "de" ? "Erneut versuchen" : "Try again"}
+        </button>
+      </div>
+    </div></div></>
+  );
+
+  if (erroTipo === "invalido" || !lead) return (
     <><style>{CSS}</style>
     <div className="cp-root"><div className="cp-wrap">
       <div className="cp-brand">{DICTS[lang].brand}</div>
@@ -301,52 +332,52 @@ export default function ClientPage({ params }: { params: Promise<{ token: string
 
               {reqOk && <div className="cp-ok" style={{ marginBottom: 14 }}>{t.req_sent}</div>}
 
-              <div className="cp-field">
-                <label className="cp-label">{t.req_new}</label>
-                <input className="input" placeholder={t.req_titulo_ph} value={reqTitulo} onChange={e => setReqTitulo(e.target.value)} style={{ marginBottom: 8 }} />
-                <textarea className="textarea" rows={3} placeholder={t.req_desc_ph} value={reqDesc} onChange={e => setReqDesc(e.target.value)} />
-                <div className="cp-file" style={{ marginTop: 8 }} onClick={() => fileReq.current?.click()}>
-                  {subindo ? t.sending : t.ob_anexos_hint}
-                </div>
-                <input ref={fileReq} type="file" multiple hidden accept="image/*,.pdf,.zip,.txt" onChange={e => upload(e.target.files, "req")} />
-                {reqAnexos.length > 0 && (
-                  <div className="cp-anexos">
-                    {reqAnexos.map((a, i) => (
-                      <a key={i} className="pill" href={a.url} target="_blank" rel="noreferrer">{a.nome}</a>
-                    ))}
-                  </div>
-                )}
-                <div style={{ marginTop: 10 }}>
-                  <button className="btn-primary" disabled={enviandoReq || subindo} onClick={enviarSolicitacao}>
-                    {enviandoReq ? t.sending : t.req_send}
-                  </button>
-                </div>
+            <div className="cp-field">
+              <label className="cp-label">{t.req_new}</label>
+              <input className="input" placeholder={t.req_titulo_ph} value={reqTitulo} onChange={e => setReqTitulo(e.target.value)} style={{ marginBottom: 8 }} />
+              <textarea className="textarea" rows={3} placeholder={t.req_desc_ph} value={reqDesc} onChange={e => setReqDesc(e.target.value)} />
+              <div className="cp-file" style={{ marginTop: 8 }} onClick={() => fileReq.current?.click()}>
+                {subindo ? t.sending : t.ob_anexos_hint}
               </div>
-
-              <div style={{ marginTop: 20 }}>
-                {reqs.length === 0 && <div className="empty">{t.req_none}</div>}
-                {reqs.map(r => (
-                  <div key={r.id} className="cp-req">
-                    <div className="cp-req-top">
-                      <span className="cp-req-title">{r.titulo || "-"}</span>
-                      <span className="tag" style={{
-                        background: r.status === "concluida" ? "#dcfce7" : r.status === "em_andamento" ? "#dbeafe" : "#fef3c7",
-                        color: r.status === "concluida" ? "#15803d" : r.status === "em_andamento" ? "#1d4ed8" : "#b45309",
-                      }}>{stLabel[r.status] || r.status}</span>
-                    </div>
-                    {r.descricao && <div className="cp-req-desc">{r.descricao}</div>}
-                    {r.resposta && <div className="cp-req-resp">{r.resposta}</div>}
-                  </div>
-                ))}
+              <input ref={fileReq} type="file" multiple hidden accept="image/*,.pdf,.zip,.txt" onChange={e => upload(e.target.files, "req")} />
+              {anexos.length > 0 && (
+                <div className="cp-anexos">
+                  {anexos.map((a, i) => (
+                    <a key={i} className="pill" href={a.url} target="_blank" rel="noreferrer">{a.nome}</a>
+                  ))}
+                </div>
+              )}
+              <div style={{ marginTop: 10 }}>
+                <button className="btn-primary" disabled={enviandoReq || subindo} onClick={enviarSolicitacao}>
+                  {enviandoReq ? t.sending : t.req_send}
+                </button>
               </div>
             </div>
-          )}
 
-          <div className="cp-section" style={{ borderTop: "1px solid rgba(0,0,0,0.07)", paddingTop: 20 }}>
-            <p className="cp-p" style={{ fontSize: 12, marginBottom: 0 }}>{t.footer}</p>
+            <div style={{ marginTop: 20 }}>
+              {reqs.length === 0 && <div className="empty">{t.req_none}</div>}
+              {reqs.map(r => (
+                <div key={r.id} className="cp-req">
+                  <div className="cp-req-top">
+                    <span className="cp-req-title">{r.titulo || "-"}</span>
+                    <span className="tag" style={{
+                      background: r.status === "concluida" ? "#dcfce7" : r.status === "em_andamento" ? "#dbeafe" : "#fef3c7",
+                      color: r.status === "concluida" ? "#15803d" : r.status === "em_andamento" ? "#1d4ed8" : "#b45309",
+                    }}>{stLabel[r.status] || r.status}</span>
+                  </div>
+                  {r.descricao && <div className="cp-req-desc">{r.descricao}</div>}
+                  {r.resposta && <div className="cp-req-resp">{r.resposta}</div>}
+                </div>
+              ))}
+            </div>
           </div>
+        )}
+
+        <div className="cp-section" style={{ borderTop: "1px solid rgba(0,0,0,0.07)", paddingTop: 20 }}>
+          <p className="cp-p" style={{ fontSize: 12, marginBottom: 0 }}>{t.footer}</p>
         </div>
       </div>
-    </>
+    </div>
+  </>
   );
 }
